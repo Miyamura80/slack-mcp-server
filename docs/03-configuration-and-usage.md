@@ -263,6 +263,8 @@ docker-compose up -d
 | `SLACK_MCP_PORT`                  | No        | `13080`                   | Port for the MCP server to listen on                                                                                                                                                                                                                                                      |
 | `SLACK_MCP_HOST`                  | No        | `127.0.0.1`               | Host for the MCP server to listen on                                                                                                                                                                                                                                                      |
 | `SLACK_MCP_API_KEY`           | No        | `nil`                     | Bearer token for SSE and HTTP transports                                                                                                                                                                                                                                                            |
+| `SLACK_MCP_MULTI_TENANT`          | No        | `false`                   | HTTP transport only. Serve many Slack bots from one process: each request carries its bot token in the `X-Slack-Bot-Token` header and no token env var is read. Requires `SLACK_MCP_API_KEY`. See [Multi-tenant bot mode](#multi-tenant-bot-mode). |
+| `SLACK_MCP_MAX_TENANTS`           | No        | `200`                     | Multi-tenant mode: how many bots to keep loaded before the least recently used one is dropped (it is rebuilt on its next request). |
 | `SLACK_MCP_PROXY`                 | No        | `nil`                     | Proxy URL for outgoing requests                                                                                                                                                                                                                                                           |
 | `SLACK_MCP_USER_AGENT`            | No        | `nil`                     | Custom User-Agent (for Enterprise Slack environments)                                                                                                                                                                                                                                     |
 | `SLACK_MCP_CUSTOM_TLS`            | No        | `nil`                     | Send custom TLS-handshake to Slack servers based on `SLACK_MCP_USER_AGENT` or default User-Agent. (for Enterprise Slack environments)                                                                                                                                                     |
@@ -278,6 +280,26 @@ docker-compose up -d
 | `SLACK_MCP_MIN_REFRESH_INTERVAL`  | No        | `30s`                     | Minimum interval between forced cache refreshes. Prevents API abuse from repeated force-refresh requests. Supports duration format (`30s`, `1m`) or seconds (`60`). Set to `0` to disable rate limiting.                                                                                  |
 | `SLACK_MCP_LOG_LEVEL`             | No        | `info`                    | Log-level for stdout or stderr. Valid values are: `debug`, `info`, `warn`, `error`, `panic` and `fatal`                                                                                                                                                                                   |
 | `SLACK_MCP_ENABLED_TOOLS`         | No        | `nil`                     | Comma-separated list of tools to register. If empty, all read-only tools and usergroups tools are registered; write tools (`conversations_add_message`, `reactions_add`, `reactions_remove`, `attachment_get_data`) require their specific env var to be set OR must be explicitly listed here. When a write tool is listed here, it's enabled without channel restrictions. Available tools: `conversations_history`, `conversations_replies`, `conversations_add_message`, `reactions_add`, `reactions_remove`, `attachment_get_data`, `conversations_search_messages`, `conversations_join`, `conversations_leave`, `conversations_unreads`, `conversations_mark`, `channels_list`, `channels_me`, `usergroups_list`, `usergroups_me`, `usergroups_create`, `usergroups_update`, `usergroups_users_update`, `users_search`. |
+
+### Multi-tenant bot mode
+
+By default one process serves one Slack identity, read from the token env vars at startup.
+With `SLACK_MCP_MULTI_TENANT=true` and `--transport http`, one process serves any number of
+bots instead, which suits a gateway that fronts many users who each bring their own Slack app:
+
+```
+POST /mcp
+Authorization: Bearer <SLACK_MCP_API_KEY>
+X-Slack-Bot-Token: xoxb-...
+```
+
+- The API key is checked first and is mandatory in this mode; the server refuses to start without it.
+- The first request for a token runs `auth.test`, builds a Slack client for it and warms its
+  users/channels caches (waiting up to 15s). Later requests with the same token reuse it.
+- Only bot tokens (`xoxb-` / `xoxe.xoxb-`) are accepted. A token Slack rejects gets a 401 and is not kept.
+- Tenants are keyed by a SHA-256 of the token, which also names their cache files. The token itself is
+  never logged or written to disk, and the header is stripped before the request reaches the tools.
+- Tool registration (`SLACK_MCP_ENABLED_TOOLS`, `SLACK_MCP_ADD_MESSAGE_TOOL`, ...) is shared by all tenants.
 
 ### Tool Registration and Permissions
 

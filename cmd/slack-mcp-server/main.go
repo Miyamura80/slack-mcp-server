@@ -68,6 +68,11 @@ func main() {
 		)
 	}
 
+	if multiTenantEnabled() {
+		runMultiTenant(transport, enabledTools, noCache, logger)
+		return
+	}
+
 	p := provider.New(transport, logger)
 	s := server.NewMCPServer(p, logger, enabledTools)
 
